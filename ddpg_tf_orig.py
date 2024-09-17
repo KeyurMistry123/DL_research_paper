@@ -1,6 +1,8 @@
 import os
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+
+tf.compat.v1.disable_eager_execution()  # Disable eager execution
 
 class OUActionNoise(object):
     def __init__(self, mu, sigma=0.15, theta=0.2, dt=1e-2, x0=None):
@@ -84,13 +86,13 @@ class Actor(object):
             self.actions_gradient = tf.placeholder(tf.float32, shape=[None, self.n_actions])
             
             f1 = 1/np.sqrt(self.fc1_dims)
-            dense1 = tf.layers.dense(self.inputs, units=self.fc1_dims, kernel_initializers = tf.random_uniform(-f1, f1), bias_initializer=tf.random_uniform(-f1, f1))
+            dense1 = tf.keras.layers.Dense(self.inputs, units=self.fc1_dims, kernel_initializers = tf.random_uniform(-f1, f1), bias_initializer=tf.random_uniform(-f1, f1))
 
             batch1 = tf.layers.batch_normalization(dense1)
             layer1_activation = tf.nn.relu(batch1)
 
             f2 = 1/np.sqrt(self.fc2_dims)
-            dense2 = tf.layers.dense(layer1_activation, units=self.fc2_dims, kernel_initializers = tf.random_uniform(-f2, f2), bias_initializer=tf.random_uniform(-f2, f2))
+            dense2 = tf.keras.layers.Dense(layer1_activation, units=self.fc2_dims, kernel_initializers = tf.random_uniform(-f2, f2), bias_initializer=tf.random_uniform(-f2, f2))
             
             batch2 = tf.layers.batch_normalization(dense2)
             layer2_activation = tf.nn.relu(batch2)
@@ -199,7 +201,7 @@ class Agent(object):
         self.memory = ReplayBuffer(max_size, input_dims, n_actions)
         self.batch_size = batch_size
         self.n_actions = n_actions
-        self.sess = tf.Session()
+        self.sess = tf.compat.v1.Session()
         
         self.actor = Actor(alpha, n_actions, 'Actor', input_dims, self.sess, layer1_size, layer2_size, env.action_space.high, batch_size)
         self.critic = Critic(beta, n_actions, 'Critic', input_dims, self.sess, layer1_size, layer2_size)
