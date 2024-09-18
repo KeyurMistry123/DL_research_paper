@@ -1,8 +1,6 @@
 import os
 import numpy as np
-import tensorflow.compat.v1 as tf
-
-tf.compat.v1.disable_eager_execution()  # Disable eager execution
+import tensorflow as tf
 
 class OUActionNoise(object):
     def __init__(self, mu, sigma=0.15, theta=0.2, dt=1e-2, x0=None):
@@ -21,7 +19,7 @@ class OUActionNoise(object):
 
     def reset(self):
         self.x_prev = self.x0 if self.x0 is not None else np.zeros_like(self.mu)
-        
+
 class ReplayBuffer(object):
     def __init__(self, max_size, input_shape, n_actions):
         self.mem_size = max_size
@@ -31,7 +29,7 @@ class ReplayBuffer(object):
         self.action_memory = np.zeros((self.mem_size, n_actions))
         self.reward_memory = np.zeros(self.mem_size)
         self.terminal_memory = np.zeros(self.mem_size, dtype=np.float32)
-        
+
     def store_transition(self, state, action, reward, new_state, done):
         index = self.mem_cntr % self.mem_size
         self.state_memory[index] = state
@@ -40,11 +38,11 @@ class ReplayBuffer(object):
         self.reward_memory[index] = reward
         self.terminal_memory[index] = 1 - int(done)
         self.mem_cntr += 1
-        
+
     def sample_buffer(self, batch_size):
         max_mem = min(self.mem_cntr, self.mem_size)
         batch = np.random.choice(max_mem, batch_size)
-        
+
         states = self.state_memory[batch]
         actions = self.action_memory[batch]
         rewards = self.reward_memory[batch]
@@ -53,227 +51,107 @@ class ReplayBuffer(object):
 
         return states, actions, rewards, new_states, terminal
 
-class Actor(object):
-    def __init__(self, lr, n_actions, name, input_dims, sess, fc1_dims, fc2_dims, action_bound, batch_size=64, chkpt_dir='tmp/ddpg'):
-        self.lr = lr
-        self.n_actions = n_actions
-        self.name = name
-        self.input_dims = input_dims
-        self.chkpt_dir = chkpt_dir
-        self.sess = sess
-        self.fc1_dims = fc1_dims
-        self.fc2_dims = fc2_dims
+class Actor(tf.keras.Model):
+    def __init__(self, n_actions, action_bound):
+        super(Actor, self).__init__()
+        self.fc1 = tf.keras.layers.Dense(400, activation='relu')
+        self.fc2 = tf.keras.layers.Dense(300, activation='relu')
+        self.mu = tf.keras.layers.Dense(n_actions, activation='tanh')
         self.action_bound = action_bound
-        self.batch_size = batch_size
-        self.replay_buffer = ReplayBuffer(self.batch_size, self.input_dims, self.n_actions)
-        
-        self.actor, self.mu, self.sigma = self.build_actor()
-        self.build_netwok()
-        self.params = tf.trainable_variables(scope=self.name)
-        self.saver = tf.train.Saver()
-        self.checkpoints = os.path.join(chkpt_dir, name+'_ddpg.chkpt')
- 
-        self.unnormalized_actor_gradients = tf.identity(self.mu, self.params, self.actor_gradients)
 
-        self.actor_gradients = list(map(lambda x: tf.div(x, self.batch_size), self.unnormalized_actor_gradients))
-        
-        self.optimize = tf.train.AdamOptimizer(self.lr).\
-            apply_gradients(zip(self.actor_gradients, self.params))
-            
-    def build_actor(self):
-        with tf.variable_scope(self.name):
-            self.inputs = tf.placeholder(tf.float32, shape=[None, *self.input_dims], name='inputs')
-            self.actions_gradient = tf.placeholder(tf.float32, shape=[None, self.n_actions])
-            
-            f1 = 1/np.sqrt(self.fc1_dims)
-            dense1 = tf.keras.layers.Dense(self.inputs, units=self.fc1_dims, kernel_initializers = tf.random_uniform(-f1, f1), bias_initializer=tf.random_uniform(-f1, f1))
+    def call(self, inputs):
+        x = self.fc1(inputs)
+        x = self.fc2(x)
+        mu = self.mu(x)
+        return mu * self.action_bound
 
-            batch1 = tf.layers.batch_normalization(dense1)
-            layer1_activation = tf.nn.relu(batch1)
+class Critic(tf.keras.Model):
+    def __init__(self, n_actions):
+        super(Critic, self).__init__()
+        self.fc1 = tf.keras.layers.Dense(400, activation='relu')
+        self.fc2 = tf.keras.layers.Dense(300, activation='relu')
+        self.q = tf.keras.layers.Dense(1)
 
-            f2 = 1/np.sqrt(self.fc2_dims)
-            dense2 = tf.keras.layers.Dense(layer1_activation, units=self.fc2_dims, kernel_initializers = tf.random_uniform(-f2, f2), bias_initializer=tf.random_uniform(-f2, f2))
-            
-            batch2 = tf.layers.batch_normalization(dense2)
-            layer2_activation = tf.nn.relu(batch2)
+    def call(self, inputs, actions):
+        x = self.fc1(inputs)
+        x = self.fc2(x)
+        x = tf.concat([x, actions], axis=-1)
+        return self.q(x)
 
-            f3 = 0.003
-            mu = tf.layers.dense(layer2_activation, units=self.n_actions, activation='tanh', kernel_initializer=tf.random_uniform(-f3, f3), bias_initializer=tf.random_uniform(-f3, f3))
-
-            self.mu = tf.multiply(mu, self.action_bound)
-            
-    def predict(self, inputs):
-        return self.sess.run(self.mu, feed_dict={self.inputs: inputs})  
-
-    def train(self, inputs, gradients):
-        self.sess.run(self.optimize, feed_dict={self.inputs:inputs, self.action_gradients:gradients})
-    
-    def save_checkpoint(self):
-        print('... saving checkpoint ...')
-        self.saver.save(self.sess, self.checkpoint_file)
-        
-    def load_checkpoint(self):
-        print('... loading checkpoint ...')
-        self.saver.restore(self.sess, self.checkpoint_file)
-        
-class Critic(object):
-    def __init__(self, lr, n_actions, name, input_dims, sess, fc1_dims, fc2_dims, action_bound, batch_size=64, chkpt_dir='tmp/ddpg'):
-        self.lr = lr
-        self.n_actions = n_actions
-        self.name = name
-        self.input_dims = input_dims
-        self.chkpt_dir = chkpt_dir
-        self.sess = sess
-        self.fc1_dims = fc1_dims
-        self.fc2_dims = fc2_dims
-        self.action_bound = action_bound
-        self.batch_size = batch_size
-        self.replay_buffer = ReplayBuffer(self.batch_size, self.input_dims, self.n_actions)
-        
-        self.critic, self.v = self.build_critic()
-        self.build_network()
-        self.params = tf.trainable_variables(scope=self.name)
-        self.saver = tf.train.Saver()
-        self.checkpoint_file = os.path.join(chkpt_dir, name+'_ddpg.chkpt')
-        
-        self.critic_gradients = tf.placeholder(tf.float32, shape=[None, self.fc1_dims])
-        self.unnormalized_critic_gradients = tf.identity(self.critic_gradients, self.params, self.critic_gradients)
-        self.critic_gradients = list(map(lambda x: tf.div(x, self.batch_size), self.unnormalized_critic_gradients))
-        
-        self.critic_optimize = tf.train.AdamOptimizer(self.lr).apply_gradients(zip(self.critic_gradients, self.params))
-        
-    def build_critic(self):
-        with tf.variable_scope(self.name):
-            self.inputs = tf.placeholder(tf.float32, shape=[None, *self.input_dims], name='inputs')
-            self.actions = tf.placeholder(tf.float32, shape=[None, self.n_actions], name='actions')
-            self.reward = tf.placeholder(tf.float32, shape=[None, 1], name='reward')
-            self.new_state = tf.placeholder(tf.float32, shape=[None, *self.input_dims], name='new_state')
-            self.terminal = tf.placeholder(tf.float32, shape=[None, 1], name='terminal')
-            
-            f1 = 1/np.sqrt(self.fc1_dims)
-            dense1 = tf.layers.dense(self.inputs, units=self.fc1_dims, kernel_initializer=tf.random_uniform(-f1, f1), bias_initializer=tf.random_uniform(-f1, f1))
-            
-    def build_network(self):
-        with tf.variable_scope(self.name):
-            self.input = tf.placeholder(tf.float32, shape=[None, *self.input_dims], name='inputs')
-            self.actions = tf.placeholder(tf.float32, shape=[None, self.n_actions], name='actions')
-            self.q_target = tf.placeholder(tf.float32, shape=[None, 1], name='targets')
- 
-            f1 = 1/np.sqrt(self.fc1_dims)
-            dense1 = tf.layers.dense(self.input, units=self.fc1_dims, kernel_initializer=tf.random_uniform(-f1, f1), bias_initializer=tf.random_uniform(-f1, f1))
-            
-            batch1 = tf.layers.batch_normalization(dense1)
-            layer1_activation = tf.nn.relu(batch1)
-            
-            f2 = 1/np.sqrt(self.fc2_dims)
-            dense2 = tf.layers.dense(layer1_activation, units=self.fc2_dims, kernel_initializer=tf.random_uniform(-f2, f2), bias_initializer=tf.random_uniform(-f2, f2))
-            
-            batch2 = tf.layers.batch_normalization(dense2)
-            
-            action_in = tf.layers.dense(self.actions, units=self.fc2_dims, activation='relu')
-            
-            state_actions = tf.add(batch2, action_in)
-            satet_actions = tf.nn.relu(state_actions)
-            
-            f3 = 0.003
-            self.q = tf.layers.dense(state_actions, units=1, kernel_initializer=tf.random_uniform(-f3, f3), bias_initializer=tf.random_uniform(-f3, f3), kernel_regularizer=tf.keras.regularizers.l2(0.01))
-            
-            self.loss = tf.losses.mean_squared_error(self.q_target, self.q)
-
-    def train(self, inputs, actions, q_target):
-        return self.sesssrun(self.q, feed_dict={self.inputs:inputs, self.actions:actions, self.q_target: q_target})
-
-    def get_action_gradients(self, inputs, actions):
-        return self.sess.run(self.action_gradients, feed_dict={self.inputs:inputs, self.actions:actions})
-    
-    def save_checkpoint(self):
-        print('... saving checkpoint ...')
-        self.saver.save(self.sess, self.checkpoint_file)
-        
-    def load_checkpoint(self):
-        print('... loading checkpoint ...')
-        self.saver.restore(self.sess, self.checkpoint_file)
-                
 class Agent(object):
-    def __init__(self, alpha, beta, input_dims, tau, env, gamma=0.99, n_actions=2, max_size=1000000, layer1_size=400, layer2_size=300, batch_size=64):
+    def __init__(self, alpha, beta, input_dims, tau, env, gamma=0.99, n_actions=2, max_size=1000000, batch_size=64):
         self.gamma = gamma
         self.tau = tau
         self.memory = ReplayBuffer(max_size, input_dims, n_actions)
         self.batch_size = batch_size
         self.n_actions = n_actions
-        self.sess = tf.compat.v1.Session()
         
-        self.actor = Actor(alpha, n_actions, 'Actor', input_dims, self.sess, layer1_size, layer2_size, env.action_space.high, batch_size)
-        self.critic = Critic(beta, n_actions, 'Critic', input_dims, self.sess, layer1_size, layer2_size)
+        self.actor = Actor(n_actions, env.action_space.high)
+        self.critic = Critic(n_actions)
         
-        self.target_actor = Actor(alpha, n_actions, 'TargetActor', input_dims, self.sess, layer1_size, layer2_size, env.action_space.high, batch_size)
-        self.target_critic = Critic(beta, n_actions, 'TargetCritic', input_dims, self.sess, layer1_size, layer2_size)
+        self.target_actor = Actor(n_actions, env.action_space.high)
+        self.target_critic = Critic(n_actions)
+
+        self.actor_optimizer = tf.keras.optimizers.Adam(alpha)
+        self.critic_optimizer = tf.keras.optimizers.Adam(beta)
         
         self.noise = OUActionNoise(mu=np.zeros(n_actions))
-        
-        self.update_critic = \
-            [self.target_critic.params[i].assign(
-                tf.multiply(self.critic.params[i], self.tau) + \
-                tf.multiply(self.target_critic.params[i], 1 - self.tau)) for i in range(len(self.target_critic.params))]
-                
-        self.update_actor = \
-            [self.target_actor.params[i].assign(
-                tf.multiply(self.actor.params[i], self.tau) + \
-                tf.multiply(self.target_actor.params[i], 1 - self.tau)) for i in range(len(self.target_actor.params))]
-        
-        self.sess.run(tf.global_variables_initializer())
-        
+
         self.update_network_parameters(first=True)
-        
+
     def update_network_parameters(self, first=False):
         if first:
-            old_tau = self.tau
-            self.tau = 1.0
-            self.target_critic.sess.run(self.update_critic)
-            self.target_actor.sess.run(self.update_actor)
-            self.tau = old_tau
+            self.target_actor.set_weights(self.actor.get_weights())
+            self.target_critic.set_weights(self.critic.get_weights())
         else:
-            self.target_critic.sess.run(self.update_critic) 
-            self.target_actor.sess.run(self.update_actor)
-            
+            actor_weights = self.actor.get_weights()
+            target_actor_weights = self.target_actor.get_weights()
+            self.target_actor.set_weights([self.tau * a + (1 - self.tau) * t for a, t in zip(actor_weights, target_actor_weights)])
+
+            critic_weights = self.critic.get_weights()
+            target_critic_weights = self.target_critic.get_weights()
+            self.target_critic.set_weights([self.tau * c + (1 - self.tau) * t for c, t in zip(critic_weights, target_critic_weights)])
+
     def remember(self, state, action, reward, new_state, done):
         self.memory.store_transition(state, action, reward, new_state, done)
-        
+
     def choose_action(self, state):
         state = state[np.newaxis, :]
-        mu = self.noise()
-        mu_prime = mu + OUActionNoise
-        return mu_prime[0]
-    
+        mu = self.actor(state).numpy()[0]
+        mu_prime = mu + self.noise()
+        return mu_prime
+
     def learn(self):
         if self.memory.mem_cntr < self.batch_size:
             return
         
         states, actions, rewards, new_states, dones = self.memory.sample_buffer(self.batch_size)
         
-        critic_value = self.target_critic.predict(new_states, self.target_actor.predict(new_states))
-        critic_value_ = self.critic.predict(new_states, self.actor.predict(new_states))
-        
-        target = []
-        for j in range(self.batch_size):
-            target.append(rewards[j] + self.gamma * critic_value[j] * (1 - dones[j]))
-        target = np.array(target), (self.batch_size, 1)
-        _=self.critic.train(states, actions, target)
-        
-        a_outs = self.actor.predict(states)
-        grads = self.critic.get_action_gradients(states, a_outs)
-        self.actor.train(states, grads[0])
+        critic_value = self.target_critic(new_states, self.target_actor(new_states))
+        target = rewards + self.gamma * critic_value * (1 - dones)
+
+        with tf.GradientTape() as tape:
+            critic_loss = tf.keras.losses.MSE(target, self.critic(states, actions))
+        critic_gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
+        self.critic_optimizer.apply_gradients(zip(critic_gradients, self.critic.trainable_variables))
+
+        with tf.GradientTape() as tape:
+            actions_out = self.actor(states)
+            actor_loss = -tf.reduce_mean(self.critic(states, actions_out))
+        actor_gradients = tape.gradient(actor_loss, self.actor.trainable_variables)
+        self.actor_optimizer.apply_gradients(zip(actor_gradients, self.actor.trainable_variables))
         
         self.update_network_parameters()
 
-def save_models(self):
-        self.actor.save_checkpoint()
-        self.critic.save_checkpoint()
-        self.target_actor.save_checkpoint()
-        self.target_critic.save_checkpoint()
-        
-def load_models(self):
-        self.actor.load_checkpoint()
-        self.critic.load_checkpoint()
-        self.target_actor.load_checkpoint()
-        self.target_critic.load_checkpoint()
+    def save_models(self):
+        print('Saving models...')
+        self.actor.save_weights('actor.weights.h5')  # Updated file extension
+        self.critic.save_weights('critic.weights.h5')  # Updated file extension
+        self.target_actor.save_weights('target_actor.weights.h5')  # Updated file extension
+        self.target_critic.save_weights('target_critic.weights.h5')  # Updated file extension
+
+    def load_models(self):
+        self.actor.load_weights('actor.h5')
+        self.critic.load_weights('critic.h5')
+        self.target_actor.load_weights('target_actor.h5')
+        self.target_critic.load_weights('target_critic.h5')
