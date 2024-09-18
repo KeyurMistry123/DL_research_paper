@@ -37,12 +37,12 @@ git clone https://github.com/your-username/your-repository-name.git
 cd your-repository-name
 ```
 
-```bash
+## Training Results
 Episode 1: Reward = -15.0
 Episode 2: Reward = -10.5
 Episode 3: Reward = -8.2
 ...
-```
+
 
 
 ## References
