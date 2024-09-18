@@ -38,11 +38,21 @@ To get started, clone the repository and install the required dependencies.
 ```bash
 git clone https://github.com/your-username/your-repository-name.git
 cd your-repository-name
+```
 
-##References
+```bash
+Episode 1: Reward = -15.0
+Episode 2: Reward = -10.5
+Episode 3: Reward = -8.2
+...
+```
+
+
+## References
 This implementation is based on the ideas and algorithms proposed in the following research paper:
 
 Continuous control with deep reinforcement learning
 Authors: Timothy P. Lillicrap, Jonathan J. Hunt, Alexander Pritzel, Nicolas Heess, Tom Erez, Yuval Tassa, David Silver, Daan Wierstra
 Published in: International Conference on Learning Representations (ICLR), 2016
 Link: https://arxiv.org/abs/1509.02971
+
