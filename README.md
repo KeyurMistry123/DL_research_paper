@@ -7,12 +7,9 @@ This repository contains the implementation of the Deep Deterministic Policy Gra
 - [Overview](#overview)
 - [Features](#features)
 - [Installation](#installation)
-- [Usage](#usage)
 - [Training Results](#training-results)
-- [File Structure](#file-structure)
 - [References](#references)
-- [Contributing](#contributing)
-- [License](#license)
+
 
 ## Overview
 
